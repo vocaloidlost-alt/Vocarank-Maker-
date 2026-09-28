@@ -376,11 +376,11 @@ function renderFrame(fadeFactor = 1){
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-  if (videoLoaded && srcVideo.readyState >= 2){
-    drawVideoIntoBox(srcVideo);
-  }
   if (templateLoaded){
     ctx.drawImage(templateImg, 0, 0, CANVAS_W, CANVAS_H);
+  }
+  if (videoLoaded && srcVideo.readyState >= 2){
+    drawVideoIntoBox(srcVideo);
   }
 
   const d = currentFormData();
