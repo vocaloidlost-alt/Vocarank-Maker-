@@ -362,11 +362,15 @@ function drawVideoIntoBox(mediaEl){
   ctx.rect(box.x, box.y, box.w, box.h);
   ctx.clip();
   const vw = mediaEl.videoWidth || box.w, vh = mediaEl.videoHeight || box.h;
-  // contain: 動画全体が枠に収まるサイズ（拡大・切り抜き・比率変更はしない）
-  const scale = Math.min(box.w / vw, box.h / vh);
+  // contain: 動画全体が枠に収まるサイズ（比率は変えない）。
+  // 縁にわずかな黒い隙間が出るのを防ぐため、ごくわずかに拡大＋下にずらす。
+  // はみ出した分は枠の裏（不透明部分の下）に隠れるだけなので見た目には影響しない。
+  const BLEED_SCALE = 1.015;
+  const SHIFT_Y = 4;
+  const scale = Math.min(box.w / vw, box.h / vh) * BLEED_SCALE;
   const dw = vw * scale, dh = vh * scale;
   const dx = box.x + (box.w - dw) / 2;
-  const dy = box.y + (box.h - dh) / 2;
+  const dy = box.y + (box.h - dh) / 2 + SHIFT_Y;
   ctx.drawImage(mediaEl, dx, dy, dw, dh);
   ctx.restore();
 }
