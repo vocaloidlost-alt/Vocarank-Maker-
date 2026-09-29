@@ -207,7 +207,7 @@ const TEMPLATE_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABQAAAALQCAYA
 
 /* ===== レイアウト定義（1280x720基準、テンプレート画像から実測） ===== */
 const LAYOUT = {
-  video: { x: 36, y: 13, w: 985, h: 559 },
+  video: { x: 36, y: 12, w: 987, h: 562 },
   number: { cx: 1141, cy: 84, size: 132, maxW: 200 },
   valueX: 1038,
   foundDate: { cx: 1141, cy: 186, size: 27 },
@@ -362,15 +362,15 @@ function drawVideoIntoBox(mediaEl){
   ctx.rect(box.x, box.y, box.w, box.h);
   ctx.clip();
   const vw = mediaEl.videoWidth || box.w, vh = mediaEl.videoHeight || box.h;
-  // contain: 動画全体が枠に収まるサイズ（比率は変えない）。
-  // 縁にわずかな黒い隙間が出るのを防ぐため、ごくわずかに拡大＋下にずらす。
-  // はみ出した分は枠の裏（不透明部分の下）に隠れるだけなので見た目には影響しない。
-  const BLEED_SCALE = 1.05;
-  const SHIFT_Y = 4;
-  const scale = Math.min(box.w / vw, box.h / vh) * BLEED_SCALE;
+  // 透過枠の高さぴったりに16:9動画が収まる基準サイズを作り、それを軸にcontain-fitする。
+  // 16:9の動画は上下の黒帯がゼロになり、横方向だけ枠よりわずかにはみ出す（不透明な縁の下に隠れる）。
+  // それ以外の比率の動画は、この基準の中でcontainされるので左右に黒帯ができる。
+  const basisH = box.h;
+  const basisW = basisH * 16 / 9;
+  const scale = Math.min(basisW / vw, basisH / vh);
   const dw = vw * scale, dh = vh * scale;
   const dx = box.x + (box.w - dw) / 2;
-  const dy = box.y + (box.h - dh) / 2 + SHIFT_Y;
+  const dy = box.y + (box.h - dh) / 2;
   ctx.drawImage(mediaEl, dx, dy, dw, dh);
   ctx.restore();
 }
