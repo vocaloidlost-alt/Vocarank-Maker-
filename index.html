@@ -194,7 +194,7 @@
     </div>
     <div id="downloadArea"></div>
     <p class="hint">
-      生成には録画（実時間で約30秒）と、その後のMP4変換（環境により数十秒〜数分）がかかります。ブラウザがMP4録画に対応していればそのまま出力し、非対応の場合のみMP4変換ライブラリ（ffmpeg.wasm、CDNから約30MB）を読み込むため、インターネット接続が必要です。ページを開いたままにしておいてください。
+      生成には録画（実時間で約30秒）と、その後のMP4変換（環境により数十秒〜数分）がかかります。編集ソフトに読み込んでも音ズレしないよう、常にMP4変換ライブラリ（ffmpeg.wasm、CDNから約30MB）でフレームレート・音声を整え直すため、インターネット接続が必要です。ページを開いたままにしておいてください。
     </p>
   </div>
 
@@ -755,29 +755,29 @@ async function recordAndExport(){
   rafId = requestAnimationFrame(loop);
 
   await recordDonePromise;
-  let mp4Blob;
-  if (nativeMp4) {
-    mp4Blob = new Blob(chunks, { type: "video/mp4" });
-  } else {
-    setStatus("録画完了。MP4へ変換する準備中...");
-    setBar(0);
-    const webmBlob = new Blob(chunks, { type: "video/webm" });
-    const ffmpeg = await getFFmpeg();
-    const { fetchFile } = FFmpegUtil;
-    await ffmpeg.writeFile("input.webm", await fetchFile(webmBlob));
-    setStatus("MP4に変換中... 0%");
-    await ffmpeg.exec([
-      "-i", "input.webm",
-      "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-      "-c:a", "aac", "-b:a", "160k",
-      "-pix_fmt", "yuv420p",
-      "output.mp4"
-    ]);
-    const data = await ffmpeg.readFile("output.mp4");
-    mp4Blob = new Blob([data.buffer], { type: "video/mp4" });
-    await ffmpeg.deleteFile("input.webm");
-    await ffmpeg.deleteFile("output.mp4");
-  }
+  // 録画そのまま（webmでもブラウザネイティブmp4でも）はタイムスタンプが不揃いになりやすく、
+  // 通常の再生では気づかなくても、CapCut等の編集ソフトに読み込むと音ズレ・音切れの原因になる。
+  // そのため常にffmpegで「フレームレート固定・音声サンプルレート統一」の綺麗なMP4に整え直す。
+  setStatus("録画完了。編集ソフトでも扱えるMP4に整えています...");
+  setBar(0);
+  const recExt = nativeMp4 ? "mp4" : "webm";
+  const recBlob = new Blob(chunks, { type: nativeMp4 ? "video/mp4" : "video/webm" });
+  const ffmpeg = await getFFmpeg();
+  const { fetchFile } = FFmpegUtil;
+  await ffmpeg.writeFile(`input.${recExt}`, await fetchFile(recBlob));
+  setStatus("MP4に変換中... 0%");
+  await ffmpeg.exec([
+    "-i", `input.${recExt}`,
+    "-r", "30", "-vsync", "cfr",
+    "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "160k",
+    "-movflags", "+faststart",
+    "output.mp4"
+  ]);
+  const data = await ffmpeg.readFile("output.mp4");
+  const mp4Blob = new Blob([data.buffer], { type: "video/mp4" });
+  await ffmpeg.deleteFile(`input.${recExt}`);
+  await ffmpeg.deleteFile("output.mp4");
 
   const url = URL.createObjectURL(mp4Blob);
   const a = document.createElement("a");
