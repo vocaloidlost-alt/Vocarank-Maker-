@@ -188,6 +188,7 @@
 
     <div class="status-row">
       <button class="primary" id="genBtn" disabled>MP4を生成</button>
+      <button type="button" id="resetBtn">入力をリセット</button>
       <div class="bar"><i id="barFill"></i></div>
       <div class="status-text" id="statusText">動画ファイルを選択してください</div>
     </div>
@@ -258,17 +259,54 @@ function addNoteRow(value=""){
   row.className = "note-line";
   row.innerHTML = `<input type="text" class="noteInput" value="${value.replace(/"/g,'&quot;')}" placeholder="例: HQ VERSION">
     <button type="button" class="small removeNote">×</button>`;
-  row.querySelector(".removeNote").onclick = () => { row.remove(); scheduleRedraw(); };
-  row.querySelector(".noteInput").addEventListener("input", scheduleRedraw);
+  row.querySelector(".removeNote").onclick = () => { row.remove(); scheduleRedraw(); saveFormState(); };
+  row.querySelector(".noteInput").addEventListener("input", () => { scheduleRedraw(); saveFormState(); });
   noteListEl.appendChild(row);
 }
-document.getElementById("addNote").onclick = () => addNoteRow();
+document.getElementById("addNote").onclick = () => { addNoteRow(); saveFormState(); };
 addNoteRow(); // 最初の1行
 
 function getNotes(){
   return Array.from(document.querySelectorAll(".noteInput"))
     .map(i => i.value.trim()).filter(v => v.length > 0);
 }
+function setNotes(list){
+  noteListEl.innerHTML = "";
+  if (!list || !list.length) { addNoteRow(); return; }
+  list.forEach(v => addNoteRow(v));
+}
+
+/* ===== 入力内容の保存（ページに残す）／リセット ===== */
+const STORAGE_KEY = "vocarank_form_state_v1";
+const TEXT_FIELD_IDS = ["rank","foundDate","viewCount","commentCount","mylistCount","status","videoTitle","uploadDate","videoId","artist"];
+
+function saveFormState(){
+  const state = {};
+  TEXT_FIELD_IDS.forEach(id => { state[id] = document.getElementById(id).value; });
+  state.notes = getNotes();
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e) {}
+}
+function loadFormState(){
+  let state;
+  try { state = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null"); } catch(e) { state = null; }
+  if (!state) return;
+  TEXT_FIELD_IDS.forEach(id => { if (state[id] != null) document.getElementById(id).value = state[id]; });
+  setNotes(state.notes || []);
+}
+function resetFormState(){
+  TEXT_FIELD_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    el.value = (id === "status") ? el.options[0].value : "";
+  });
+  setNotes([]);
+  document.getElementById("foundDateHint").textContent = "";
+  document.getElementById("uploadDateHint").textContent = "";
+  try { localStorage.removeItem(STORAGE_KEY); } catch(e) {}
+  scheduleRedraw();
+}
+document.getElementById("resetBtn").addEventListener("click", () => {
+  if (confirm("入力した内容をすべてリセットします。よろしいですか？")) resetFormState();
+});
 
 /* 日付入力の英語表記プレビュー */
 [["foundDate","foundDateHint"],["uploadDate","uploadDateHint"]].forEach(([id, hintId]) => {
@@ -431,6 +469,12 @@ document.querySelectorAll("input, select").forEach(el => {
   el.addEventListener("input", scheduleRedraw);
   el.addEventListener("change", scheduleRedraw);
 });
+TEXT_FIELD_IDS.forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener("input", saveFormState);
+  el.addEventListener("change", saveFormState);
+});
+loadFormState();
 renderFrame(1);
 
 /* ===== 動画ファイルの読み込み・トリミング（タイムライン） ===== */
