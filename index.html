@@ -673,8 +673,7 @@ async function getFFmpeg(){
   const core = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
   await ff.load({
     coreURL: await toBlobURL(`${core}/ffmpeg-core.js`, "text/javascript"),
-    wasmURL: await toBlobURL(`${core}/ffmpeg-core.wasm`, "application/wasm"),
-    classWorkerURL: await toBlobURL("https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js", "text/javascript")
+    wasmURL: await toBlobURL(`${core}/ffmpeg-core.wasm`, "application/wasm")
   });
   ffmpegInstance = ff;
   return ff;
@@ -688,7 +687,8 @@ genBtn.addEventListener("click", async () => {
     await recordAndExport();
   } catch (err) {
     console.error(err);
-    setStatus("エラーが発生しました: " + err.message);
+    const msg = (err && (err.message || err.name)) || (typeof err === "string" ? err : JSON.stringify(err)) || "詳細不明（ブラウザの開発者ツールのコンソールを確認してください）";
+    setStatus("エラーが発生しました: " + msg);
   } finally {
     recording = false;
     if (monitorGain) monitorGain.gain.value = 1;
