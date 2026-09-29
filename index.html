@@ -36,7 +36,7 @@
   .row2{display:flex; gap:8px;}
   .row2 > div{flex:1;}
   .note-line{display:flex; gap:6px; margin-bottom:6px;}
-  .note-line input{flex:1;}
+  .note-line textarea{flex:1; resize:vertical; min-height:40px; line-height:1.4; font-family:inherit;}
   button{
     background:var(--panel2); border:1px solid var(--line); color:var(--text);
     padding:6px 10px; border-radius:4px; font-size:12px; cursor:pointer;
@@ -257,10 +257,22 @@ const noteListEl = document.getElementById("noteList");
 function addNoteRow(value=""){
   const row = document.createElement("div");
   row.className = "note-line";
-  row.innerHTML = `<input type="text" class="noteInput" value="${value.replace(/"/g,'&quot;')}" placeholder="例: HQ VERSION">
-    <button type="button" class="small removeNote">×</button>`;
-  row.querySelector(".removeNote").onclick = () => { row.remove(); scheduleRedraw(); saveFormState(); };
-  row.querySelector(".noteInput").addEventListener("input", () => { scheduleRedraw(); saveFormState(); });
+
+  const ta = document.createElement("textarea");
+  ta.className = "noteInput";
+  ta.rows = 2;
+  ta.placeholder = "例: HQ VERSION（改行で複数行にできます）";
+  ta.value = value;
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "small removeNote";
+  btn.textContent = "×";
+
+  row.appendChild(ta);
+  row.appendChild(btn);
+  btn.onclick = () => { row.remove(); scheduleRedraw(); saveFormState(); };
+  ta.addEventListener("input", () => { scheduleRedraw(); saveFormState(); });
   noteListEl.appendChild(row);
 }
 document.getElementById("addNote").onclick = () => { addNoteRow(); saveFormState(); };
@@ -434,9 +446,13 @@ function renderFrame(fadeFactor = 1){
   const statusSize = Math.min(...['FULLY FOUND','AUDIO ONLY'].map(t => fitTextSize(t, LAYOUT.statusValue.maxW, LAYOUT.statusValue.size, 13)));
   drawCenteredShadow(d.status, LAYOUT.statusValue.cx, LAYOUT.statusValue.cy, statusSize);
 
-  // ノート（左揃え・複数行・上詰め）
+  // ノート（左揃え・上詰め・各行内の改行もそのまま反映）
   const na = LAYOUT.noteArea;
-  d.notes.slice(0, 5).forEach((line, i) => {
+  const noteLines = d.notes
+    .flatMap(n => n.split("\n"))
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+  noteLines.slice(0, 5).forEach((line, i) => {
     drawLeftShadow(line, na.x, na.y + na.lineH * i + na.lineH/2, na.size);
   });
 
