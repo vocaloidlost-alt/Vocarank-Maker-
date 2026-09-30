@@ -779,11 +779,14 @@ async function recordAndExport(){
       const { fetchFile } = FFmpegUtil;
       await ffmpeg.writeFile(`input.${recExt}`, await fetchFile(rawBlob));
       setStatus("MP4を整え直しています... 0%");
+      // 映像は再エンコードせずコピーし（メモリ・処理を大きく節約）、
+      // 音声だけを一定のサンプルレートで再エンコードして詰め直す。
+      // CapCutでの音切れは音声側のタイムスタンプのガタつきが主因と考えられるため、
+      // 映像フルエンコードより軽い処理でも改善が見込める。
       await ffmpeg.exec([
         "-i", `input.${recExt}`,
-        "-r", "30", "-vsync", "cfr",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "160k",
+        "-c:v", "copy",
+        "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
         "-movflags", "+faststart",
         "output.mp4"
       ]);
@@ -799,7 +802,9 @@ async function recordAndExport(){
       ffmpegInstance = null;
     }
   }
-  const lastErrMsg = lastErr ? ((lastErr.message || lastErr.name || String(lastErr))) : "";
+  const lastErrMsg = (lastErr !== null && lastErr !== undefined)
+    ? (lastErr.message || lastErr.name || String(lastErr))
+    : "変換処理が途中で終了しました（メモリ不足の可能性があります）";
   if (!normalized && !nativeMp4) {
     // webmしか無く、mp4化する手段が無いのでここはエラーにする
     throw new Error("MP4への変換に失敗しました（このブラウザでは書き出せませんでした）: " + lastErrMsg);
