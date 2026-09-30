@@ -766,6 +766,7 @@ async function recordAndExport(){
   const rawBlob = new Blob(chunks, { type: nativeMp4 ? "video/mp4" : "video/webm" });
   let mp4Blob = rawBlob;
   let normalized = false;
+  let lastErr = null;
 
   // 一度読み込んだffmpegインスタンスが（特にiOS Safariで）途中から壊れて
   // 失敗することがあるため、最大2回まで「毎回新しいインスタンスで」試す。
@@ -793,13 +794,15 @@ async function recordAndExport(){
       normalized = true;
     } catch (err) {
       console.error(`normalize step failed (attempt ${attempt}):`, err);
+      lastErr = err;
       // 壊れている可能性があるインスタンスは捨てて、次回は必ず作り直す
       ffmpegInstance = null;
     }
   }
+  const lastErrMsg = lastErr ? ((lastErr.message || lastErr.name || String(lastErr))) : "";
   if (!normalized && !nativeMp4) {
     // webmしか無く、mp4化する手段が無いのでここはエラーにする
-    throw new Error("MP4への変換に失敗しました（このブラウザでは書き出せませんでした）");
+    throw new Error("MP4への変換に失敗しました（このブラウザでは書き出せませんでした）: " + lastErrMsg);
   }
 
   const url = URL.createObjectURL(mp4Blob);
@@ -813,7 +816,7 @@ async function recordAndExport(){
   setBar(100);
   setStatus(normalized
     ? "完成!ダウンロードできます。（編集ソフト向けに整え済み）"
-    : "完成!ダウンロードできます。（整え直しはできなかったため、そのままの書き出しです）");
+    : `完成!ダウンロードできます。（整え直しはできなかったため、そのままの書き出しです / エラー内容: ${lastErrMsg || "不明"}）`);
 }
 
 /* ===== Webフォント読み込み後に再描画 ===== */
