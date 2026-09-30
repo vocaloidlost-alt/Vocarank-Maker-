@@ -160,7 +160,8 @@
       <label>動画ファイルを選択</label>
       <input type="file" id="videoFile" accept="video/*">
       <div class="hint">選択すると、右側のタイムラインで使う30秒を選べます。</div>
-      <video id="srcVideo" playsinline crossorigin="anonymous" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"></video>
+      <video id="srcVideo" playsinline muted crossorigin="anonymous" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"></video>
+      <video id="audioVideo" playsinline crossorigin="anonymous" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"></video>
     </fieldset>
 
   </div>
@@ -336,6 +337,7 @@ templateImg.onload = () => { templateLoaded = true; scheduleRedraw(); };
 templateImg.src = TEMPLATE_SRC;
 
 const srcVideo = document.getElementById("srcVideo");
+const audioVideo = document.getElementById("audioVideo");
 let videoLoaded = false;
 
 function currentFormData(){
@@ -522,7 +524,10 @@ function positionWin(){
 function setStart(t, seek = true){
   trimStartVal = clamp(t, 0, maxStart());
   positionWin();
-  if (seek) srcVideo.currentTime = trimStartVal;
+  if (seek) {
+    srcVideo.currentTime = trimStartVal;
+    try { audioVideo.currentTime = trimStartVal; } catch(e) {}
+  }
 }
 
 videoFileInput.addEventListener("change", () => {
@@ -532,6 +537,7 @@ videoFileInput.addEventListener("change", () => {
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = URL.createObjectURL(file);
   srcVideo.src = objectUrl;
+  audioVideo.src = objectUrl;
   videoLoaded = false;
   srcVideo.onloadedmetadata = () => {
     videoLoaded = true;
@@ -600,7 +606,10 @@ let audioCtx = null, gainNode = null, recDest = null, monitorGain = null;
 function ensureAudioGraph(){
   if (audioCtx) return;
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  const srcNode = audioCtx.createMediaElementSource(srcVideo);
+  // 音声は「見えない専用の動画要素(audioVideo)」からだけ取る。
+  // キャンバスに描画するsrcVideoをWeb Audioにつなぐと、SafariでcaptureStream()が
+  // "The operation is insecure" を投げることがあるため、描画用と音声用を分けている。
+  const srcNode = audioCtx.createMediaElementSource(audioVideo);
   gainNode = audioCtx.createGain();
   recDest = audioCtx.createMediaStreamDestination();
   monitorGain = audioCtx.createGain();
@@ -608,6 +617,7 @@ function ensureAudioGraph(){
   srcNode.connect(monitorGain); monitorGain.connect(audioCtx.destination);
 }
 function seekTo(t){
+  try { audioVideo.currentTime = t; } catch(e) {}
   return new Promise(res => {
     if (Math.abs(srcVideo.currentTime - t) < 0.01) return res();
     const done = () => { srcVideo.removeEventListener("seeked", done); res(); };
@@ -624,6 +634,7 @@ function stopPreview(){
   previewing = false;
   cancelAnimationFrame(previewRaf);
   srcVideo.pause();
+  audioVideo.pause();
   previewBtn.textContent = "▶ 範囲を再生";
   tlHead.style.display = "none";
 }
@@ -634,6 +645,7 @@ async function startPreview(){
   monitorGain.gain.value = 1;
   await seekTo(trimStartVal);
   await srcVideo.play();
+  try { await audioVideo.play(); } catch(e) {}
   previewing = true;
   previewBtn.textContent = "■ 停止";
   tlHead.style.display = "block";
@@ -727,6 +739,7 @@ async function recordAndExport(){
   setBar(0);
 
   await srcVideo.play();
+  try { await audioVideo.play(); } catch(e) {}
   const t0 = performance.now();
   if (gainNode){
     gainNode.gain.cancelScheduledValues(0);
@@ -749,6 +762,7 @@ async function recordAndExport(){
     } else {
       cancelAnimationFrame(rafId);
       srcVideo.pause();
+      audioVideo.pause();
       recorder.stop();
     }
   }
