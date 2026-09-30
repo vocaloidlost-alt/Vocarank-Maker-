@@ -194,7 +194,7 @@
     </div>
     <div id="downloadArea"></div>
     <p class="hint">
-      生成には録画（実時間で約30秒）と、その後のMP4変換（環境により数十秒〜数分）がかかります。ブラウザがMP4録画に対応していればそのまま出力し、非対応の場合のみMP4変換ライブラリ（ffmpeg.wasm、CDNから約30MB）を読み込むため、インターネット接続が必要です。ページを開いたままにしておいてください。
+      生成には録画（実時間で約30秒）と、その後の整え直し（環境により数十秒〜数分）がかかります。編集ソフトでも音が途切れないよう、MP4変換ライブラリ（ffmpeg.wasm、CDNから約30MB）で整え直しを試みます。うまくいかない環境では、そのままの書き出しになります。いずれの場合もインターネット接続が必要です。ページを開いたままにしておいてください。
     </p>
   </div>
 
@@ -755,30 +755,43 @@ async function recordAndExport(){
   rafId = requestAnimationFrame(loop);
 
   await recordDonePromise;
-  let mp4Blob;
-  if (nativeMp4) {
-    // ブラウザがそのままMP4で録画できた場合はffmpeg変換を挟まない
-    // （Note改行対応の時点で問題なく出力できていた挙動に戻している）
-    mp4Blob = new Blob(chunks, { type: "video/mp4" });
-  } else {
-    setStatus("録画完了。MP4へ変換する準備中...");
+
+  // 録画そのまま（特にブラウザネイティブのMP4）は、再生には問題無くても
+  // フレーム・音声のタイムスタンプが不揃いなことがあり、CapCut等の編集ソフトに
+  // 読み込むと音が途切れることがある。YouTubeにアップロードし直すと直るのは、
+  // YouTube側でこのタイムスタンプを整えた綺麗なファイルに再エンコードされるため。
+  // なのでここでも同じように「整え直す」処理を試みるが、その処理自体が使えない
+  // 環境（今回のiPhone Safariなど）では失敗するので、その場合は今まで通り
+  // 生の録画データをそのまま出力する（失敗してもエラーにはしない）。
+  let mp4Blob = new Blob(chunks, { type: nativeMp4 ? "video/mp4" : "video/webm" });
+  let normalized = false;
+  try {
+    setStatus("編集ソフトでも音が途切れないよう整えています...");
     setBar(0);
-    const webmBlob = new Blob(chunks, { type: "video/webm" });
+    const recExt = nativeMp4 ? "mp4" : "webm";
     const ffmpeg = await getFFmpeg();
     const { fetchFile } = FFmpegUtil;
-    await ffmpeg.writeFile("input.webm", await fetchFile(webmBlob));
-    setStatus("MP4に変換中... 0%");
+    await ffmpeg.writeFile(`input.${recExt}`, await fetchFile(mp4Blob));
+    setStatus("MP4を整え直しています... 0%");
     await ffmpeg.exec([
-      "-i", "input.webm",
-      "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-      "-c:a", "aac", "-b:a", "160k",
-      "-pix_fmt", "yuv420p",
+      "-i", `input.${recExt}`,
+      "-r", "30", "-vsync", "cfr",
+      "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "160k",
+      "-movflags", "+faststart",
       "output.mp4"
     ]);
     const data = await ffmpeg.readFile("output.mp4");
     mp4Blob = new Blob([data.buffer], { type: "video/mp4" });
-    await ffmpeg.deleteFile("input.webm");
+    await ffmpeg.deleteFile(`input.${recExt}`);
     await ffmpeg.deleteFile("output.mp4");
+    normalized = true;
+  } catch (err) {
+    console.error("normalize step failed, falling back to raw recording:", err);
+    if (!nativeMp4) {
+      // webmしか無く、mp4化する手段が無いのでここはエラーにする
+      throw new Error("MP4への変換に失敗しました（このブラウザでは書き出せませんでした）");
+    }
   }
 
   const url = URL.createObjectURL(mp4Blob);
@@ -790,7 +803,9 @@ async function recordAndExport(){
   downloadArea.innerHTML = "";
   downloadArea.appendChild(a);
   setBar(100);
-  setStatus("完成!ダウンロードできます。");
+  setStatus(normalized
+    ? "完成!ダウンロードできます。（編集ソフト向けに整え済み）"
+    : "完成!ダウンロードできます。（整え直しはできなかったため、そのままの書き出しです）");
 }
 
 /* ===== Webフォント読み込み後に再描画 ===== */
