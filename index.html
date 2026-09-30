@@ -763,35 +763,43 @@ async function recordAndExport(){
   // なのでここでも同じように「整え直す」処理を試みるが、その処理自体が使えない
   // 環境（今回のiPhone Safariなど）では失敗するので、その場合は今まで通り
   // 生の録画データをそのまま出力する（失敗してもエラーにはしない）。
-  let mp4Blob = new Blob(chunks, { type: nativeMp4 ? "video/mp4" : "video/webm" });
+  const rawBlob = new Blob(chunks, { type: nativeMp4 ? "video/mp4" : "video/webm" });
+  let mp4Blob = rawBlob;
   let normalized = false;
-  try {
-    setStatus("編集ソフトでも音が途切れないよう整えています...");
-    setBar(0);
-    const recExt = nativeMp4 ? "mp4" : "webm";
-    const ffmpeg = await getFFmpeg();
-    const { fetchFile } = FFmpegUtil;
-    await ffmpeg.writeFile(`input.${recExt}`, await fetchFile(mp4Blob));
-    setStatus("MP4を整え直しています... 0%");
-    await ffmpeg.exec([
-      "-i", `input.${recExt}`,
-      "-r", "30", "-vsync", "cfr",
-      "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
-      "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "160k",
-      "-movflags", "+faststart",
-      "output.mp4"
-    ]);
-    const data = await ffmpeg.readFile("output.mp4");
-    mp4Blob = new Blob([data.buffer], { type: "video/mp4" });
-    await ffmpeg.deleteFile(`input.${recExt}`);
-    await ffmpeg.deleteFile("output.mp4");
-    normalized = true;
-  } catch (err) {
-    console.error("normalize step failed, falling back to raw recording:", err);
-    if (!nativeMp4) {
-      // webmしか無く、mp4化する手段が無いのでここはエラーにする
-      throw new Error("MP4への変換に失敗しました（このブラウザでは書き出せませんでした）");
+
+  // 一度読み込んだffmpegインスタンスが（特にiOS Safariで）途中から壊れて
+  // 失敗することがあるため、最大2回まで「毎回新しいインスタンスで」試す。
+  for (let attempt = 1; attempt <= 2 && !normalized; attempt++){
+    try {
+      setStatus(`編集ソフトでも音が途切れないよう整えています...${attempt > 1 ? "（再試行中）" : ""}`);
+      setBar(0);
+      const recExt = nativeMp4 ? "mp4" : "webm";
+      const ffmpeg = await getFFmpeg();
+      const { fetchFile } = FFmpegUtil;
+      await ffmpeg.writeFile(`input.${recExt}`, await fetchFile(rawBlob));
+      setStatus("MP4を整え直しています... 0%");
+      await ffmpeg.exec([
+        "-i", `input.${recExt}`,
+        "-r", "30", "-vsync", "cfr",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "160k",
+        "-movflags", "+faststart",
+        "output.mp4"
+      ]);
+      const data = await ffmpeg.readFile("output.mp4");
+      mp4Blob = new Blob([data.buffer], { type: "video/mp4" });
+      await ffmpeg.deleteFile(`input.${recExt}`);
+      await ffmpeg.deleteFile("output.mp4");
+      normalized = true;
+    } catch (err) {
+      console.error(`normalize step failed (attempt ${attempt}):`, err);
+      // 壊れている可能性があるインスタンスは捨てて、次回は必ず作り直す
+      ffmpegInstance = null;
     }
+  }
+  if (!normalized && !nativeMp4) {
+    // webmしか無く、mp4化する手段が無いのでここはエラーにする
+    throw new Error("MP4への変換に失敗しました（このブラウザでは書き出せませんでした）");
   }
 
   const url = URL.createObjectURL(mp4Blob);
