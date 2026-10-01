@@ -172,16 +172,17 @@
 
     <div class="trim-box" id="trimBox" style="display:none">
       <div class="trim-head">
-        <span class="trim-title">使う30秒を選ぶ（枠をドラッグ／タイムラインをクリック）</span>
+        <span class="trim-title">使う30秒を選ぶ（枠の右端＝終点。枠をドラッグ／タイムラインをクリックで終点を指定）</span>
         <span class="trim-btns">
           <button type="button" class="small" id="nudgeBack">◀ 1秒</button>
           <button type="button" class="small" id="nudgeFwd">1秒 ▶</button>
-          <button type="button" class="small" id="previewBtn">▶ 範囲を再生</button>
+          <button type="button" class="small" id="previewBtn">▶ 終点から再生</button>
         </span>
       </div>
       <div class="tl" id="tl">
         <canvas id="tlStrip" width="1280" height="72"></canvas>
-        <div class="tl-win" id="tlWin"><div class="tl-head" id="tlHead"></div></div>
+        <div class="tl-win" id="tlWin"></div>
+        <div class="tl-head" id="tlHead"></div>
       </div>
       <div class="hint" id="trimInfo"></div>
     </div>
@@ -519,10 +520,14 @@ function positionWin(){
   trimInfo.textContent = `使用範囲: ${fmtTime(trimStartVal)} 〜 ${fmtTime(trimStartVal + winLen)}（${winLen.toFixed(1)}秒間） / 動画全体 ${fmtTime(dur)}`
     + (dur < CLIP_SECONDS ? "　※30秒に満たないため全体を使用します" : "");
 }
+function previewPos(){
+  const dur = srcVideo.duration || 0;
+  return clamp(trimStartVal + winLen, 0, Math.max(0, dur - 0.05));
+}
 function setStart(t, seek = true){
   trimStartVal = clamp(t, 0, maxStart());
   positionWin();
-  if (seek) srcVideo.currentTime = trimStartVal;
+  if (seek) srcVideo.currentTime = previewPos();
 }
 
 videoFileInput.addEventListener("change", () => {
@@ -569,31 +574,45 @@ async function buildThumbs(url, dur){
   }
 }
 
-/* ドラッグ操作 */
-let dragging = false, dragDX = 0;
+/* ドラッグ操作（再生中なら操作の間だけ一時停止し、離したら新しい終点から再生を再開） */
+let dragging = false, dragDX = 0, tlDragging = false, moveResume = false;
+function beginMove(){
+  if (previewing && !recording && !moveResume){ moveResume = true; srcVideo.pause(); }
+}
+function endMove(){
+  if (!moveResume) return;
+  moveResume = false;
+  if (previewing) srcVideo.play().catch(() => {});
+}
 function startFromClientX(leftClientX){
   const r = tl.getBoundingClientRect();
   setStart((leftClientX - r.left) / r.width * srcVideo.duration);
 }
+function endFromClientX(clientX){
+  const r = tl.getBoundingClientRect();
+  setStart((clientX - r.left) / r.width * srcVideo.duration - winLen);
+}
 tlWin.addEventListener("pointerdown", e => {
   if (!videoLoaded) return;
   e.stopPropagation();
-  stopPreview();
+  beginMove();
   dragging = true;
   dragDX = e.clientX - tlWin.getBoundingClientRect().left;
   tlWin.setPointerCapture(e.pointerId);
 });
 tlWin.addEventListener("pointermove", e => { if (dragging) startFromClientX(e.clientX - dragDX); });
-["pointerup", "pointercancel"].forEach(ev => tlWin.addEventListener(ev, () => { dragging = false; }));
+["pointerup", "pointercancel"].forEach(ev => tlWin.addEventListener(ev, () => { dragging = false; endMove(); }));
 tl.addEventListener("pointerdown", e => {
   if (!videoLoaded || e.target === tlWin || tlWin.contains(e.target)) return;
-  stopPreview();
-  const r = tl.getBoundingClientRect();
-  const center = (e.clientX - r.left) / r.width * srcVideo.duration;
-  setStart(center - winLen / 2);
+  beginMove();
+  tlDragging = true;
+  tl.setPointerCapture(e.pointerId);
+  endFromClientX(e.clientX);
 });
-document.getElementById("nudgeBack").onclick = () => { stopPreview(); setStart(trimStartVal - 1); };
-document.getElementById("nudgeFwd").onclick = () => { stopPreview(); setStart(trimStartVal + 1); };
+tl.addEventListener("pointermove", e => { if (tlDragging) endFromClientX(e.clientX); });
+["pointerup", "pointercancel"].forEach(ev => tl.addEventListener(ev, () => { tlDragging = false; endMove(); }));
+document.getElementById("nudgeBack").onclick = () => { setStart(trimStartVal - 1); };
+document.getElementById("nudgeFwd").onclick = () => { setStart(trimStartVal + 1); };
 
 /* 音声グラフ（録画用の出力＋プレビュー用のモニター） */
 let audioCtx = null, gainNode = null, recDest = null, monitorGain = null;
@@ -617,14 +636,15 @@ function seekTo(t){
   });
 }
 
-/* 範囲プレビュー再生 */
+/* プレビュー再生：選択範囲の終点から動画の最後まで再生する */
 let previewing = false, previewRaf = 0, recording = false;
 function stopPreview(){
   if (!previewing) return;
   previewing = false;
+  moveResume = false;
   cancelAnimationFrame(previewRaf);
   srcVideo.pause();
-  previewBtn.textContent = "▶ 範囲を再生";
+  previewBtn.textContent = "▶ 終点から再生";
   tlHead.style.display = "none";
 }
 async function startPreview(){
@@ -632,7 +652,7 @@ async function startPreview(){
   ensureAudioGraph();
   if (audioCtx.state === "suspended") await audioCtx.resume();
   monitorGain.gain.value = 1;
-  await seekTo(trimStartVal);
+  await seekTo(previewPos());
   await srcVideo.play();
   previewing = true;
   previewBtn.textContent = "■ 停止";
@@ -640,11 +660,12 @@ async function startPreview(){
   const loop = () => {
     if (!previewing) return;
     const t = srcVideo.currentTime;
+    const dur = srcVideo.duration || 1;
     renderFrame(1);
-    tlHead.style.left = (clamp((t - trimStartVal) / winLen, 0, 1) * 100) + "%";
-    if (t >= trimStartVal + winLen - 0.03 || srcVideo.ended){
+    tlHead.style.left = (clamp(t / dur, 0, 1) * 100) + "%";
+    if (!moveResume && (srcVideo.ended || t >= dur - 0.03)){
       stopPreview();
-      srcVideo.currentTime = trimStartVal;
+      srcVideo.currentTime = previewPos();
       return;
     }
     previewRaf = requestAnimationFrame(loop);
