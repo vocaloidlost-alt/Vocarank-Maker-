@@ -749,39 +749,16 @@ genBtn.addEventListener("click", async () => {
   }
 });
 
-function waitVideoFrame(ms){
-  return new Promise(res => {
-    let done = false;
-    const fin = () => { if (!done){ done = true; res(); } };
-    if (srcVideo.requestVideoFrameCallback) srcVideo.requestVideoFrameCallback(() => fin());
-    setTimeout(fin, ms);
-  });
-}
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
 async function recordAndExport(){
   stopPreview();
   owStop();
   const startT = overwriteMode ? 0 : trimStartVal;
   const dur = srcVideo.duration || CLIP_SECONDS;
   const clipLen = overwriteMode ? dur : Math.min(CLIP_SECONDS, dur - startT);
-  const endT = startT + clipLen;
-  const PREROLL = 0.2, TAIL = 0.3;   // 録画の立ち上がり／終わりで端が欠けないための余白（黒フレーム）
 
   ensureAudioGraph();
   if (audioCtx.state === "suspended") await audioCtx.resume();
   monitorGain.gain.value = 0;
-  gainNode.gain.cancelScheduledValues(0);
-  gainNode.gain.value = overwriteMode ? 1 : 0;
-
-  // 一度だけ「ならし再生」をして、映像のデコードを温めてから開始位置に戻す。
-  // （再生ボタンを押した直後は映像が出るまで遅れることがあり、冒頭が欠ける原因になるため）
-  setStatus("準備中...");
-  setBar(0);
-  await seekTo(startT);
-  await srcVideo.play();
-  await waitVideoFrame(800);
-  srcVideo.pause();
   await seekTo(startT);
 
   const canvasStream = canvas.captureStream(30);
@@ -800,53 +777,53 @@ async function recordAndExport(){
   const recordDonePromise = new Promise(resolve => { recorder.onstop = resolve; });
   const recordStartedPromise = new Promise(resolve => { recorder.onstart = resolve; });
 
-  // 先に録画を始め、本当に始まるのを待ってから動画を再生する（録画の立ち上がりで冒頭が欠けないように）。
-  // 停止も「経過した実時間」ではなく「動画が実際に終点まで再生されたか」で判断する。
-  recorder.start(250);
-  await Promise.race([recordStartedPromise, sleep(1500)]);
+  setStatus("録画中... 0.0秒 / " + clipLen.toFixed(1) + "秒");
+  setBar(0);
 
-  const wallStart = performance.now();
-  let playing = false, playWall = 0, endWall = 0, playErr = null;
+  // 従来と同じ流れ（再生 → 録画 → 時間で終了）だが、録画が実際に始まってから再生を始める。
+  // 録画の立ち上がりが遅れた分だけ冒頭が欠けたり、全体が短くなったりするのを防ぐため。
+  recorder.start(250);
+  await Promise.race([recordStartedPromise, new Promise(r => setTimeout(r, 1500))]);
+
+  await srcVideo.play();
+  // 上書きモード：元動画の最初のフレームが実際に描かれるまで待つ
+  // （再生開始直後は映像が遅れて出るため、その間に文字だけが先に出てしまうのを防ぐ）
+  if (overwriteMode){
+    await new Promise(res => {
+      let done = false;
+      const fin = () => { if (!done){ done = true; res(); } };
+      if (srcVideo.requestVideoFrameCallback) srcVideo.requestVideoFrameCallback(() => fin());
+      setTimeout(fin, 1500);
+    });
+  }
+  const t0 = performance.now();
+  // 上書きモードでは元の動画に音声フェードが既に入っているので、ここでは掛けない
+  if (gainNode && !overwriteMode){
+    gainNode.gain.cancelScheduledValues(0);
+    gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+    gainNode.gain.linearRampToValueAtTime(1, audioCtx.currentTime + FADE_SECONDS);
+    gainNode.gain.setValueAtTime(1, audioCtx.currentTime + Math.max(FADE_SECONDS, clipLen - FADE_SECONDS));
+    gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + clipLen);
+  }
+
   let rafId;
   function loop(){
-    const now = performance.now();
-    if (!playing && (now - wallStart) / 1000 >= PREROLL){
-      playing = true;
-      playWall = now;
-      srcVideo.play().catch(e => { playErr = e; });
-    }
-    const vt = srcVideo.currentTime;
-    const prog = clamp(vt - startT, 0, clipLen);
-    let fadeFactor = 0;
-    if (playing && !endWall){
-      fadeFactor = clamp(Math.min((vt - startT) / FADE_SECONDS, (endT - vt) / FADE_SECONDS, 1), 0, 1);
-    }
-    renderFrame(fadeFactor);
-    if (gainNode){
-      gainNode.gain.setTargetAtTime(overwriteMode ? 1 : fadeFactor, audioCtx.currentTime, 0.03);
-    }
-    setStatus(`録画中... ${prog.toFixed(1)}秒 / ${clipLen.toFixed(1)}秒`);
-    setBar((prog / clipLen) * 100);
-
-    if (playing && !endWall){
-      const reachedEnd = vt >= endT - 0.03 || srcVideo.ended;
-      const stalled = (now - playWall) / 1000 > clipLen + 10;   // 万一止まった場合の保険
-      if (reachedEnd || stalled || playErr){
-        endWall = now;
-        srcVideo.pause();
-      }
-    }
-    if (endWall && (now - endWall) / 1000 >= TAIL){
+    const elapsed = (performance.now() - t0) / 1000;
+    const fadeFactor = Math.min(elapsed / FADE_SECONDS, (clipLen - elapsed) / FADE_SECONDS, 1);
+    renderFrame(Math.max(0, fadeFactor));
+    setStatus(`録画中... ${elapsed.toFixed(1)}秒 / ${clipLen.toFixed(1)}秒`);
+    setBar((elapsed / clipLen) * 100);
+    if (elapsed < clipLen && !(overwriteMode && srcVideo.ended)){
+      rafId = requestAnimationFrame(loop);
+    } else {
       cancelAnimationFrame(rafId);
+      srcVideo.pause();
       recorder.stop();
-      return;
     }
-    rafId = requestAnimationFrame(loop);
   }
   rafId = requestAnimationFrame(loop);
 
   await recordDonePromise;
-  if (playErr) throw playErr;
 
   // 録画そのまま（特にブラウザネイティブのMP4）は、再生には問題無くても
   // フレーム・音声のタイムスタンプが不揃いなことがあり、CapCut等の編集ソフトに
