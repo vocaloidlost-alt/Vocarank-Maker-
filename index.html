@@ -775,18 +775,12 @@ async function recordAndExport(){
   recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
 
   const recordDonePromise = new Promise(resolve => { recorder.onstop = resolve; });
-  const recordStartedPromise = new Promise(resolve => { recorder.onstart = resolve; });
 
   setStatus("録画中... 0.0秒 / " + clipLen.toFixed(1) + "秒");
   setBar(0);
 
-  // 従来と同じ流れ（再生 → 録画 → 時間で終了）だが、録画が実際に始まってから再生を始める。
-  // 録画の立ち上がりが遅れた分だけ冒頭が欠けたり、全体が短くなったりするのを防ぐため。
-  recorder.start(250);
-  await Promise.race([recordStartedPromise, new Promise(r => setTimeout(r, 1500))]);
-
   await srcVideo.play();
-  // 上書きモード：元動画の最初のフレームが実際に描かれるまで待つ
+  // 上書きモード：元動画の最初のフレームが実際に描かれるまで待ってから録画を始める
   // （再生開始直後は映像が遅れて出るため、その間に文字だけが先に出てしまうのを防ぐ）
   if (overwriteMode){
     await new Promise(res => {
@@ -805,6 +799,7 @@ async function recordAndExport(){
     gainNode.gain.setValueAtTime(1, audioCtx.currentTime + Math.max(FADE_SECONDS, clipLen - FADE_SECONDS));
     gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + clipLen);
   }
+  recorder.start(250);
 
   let rafId;
   function loop(){
