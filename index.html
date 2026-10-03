@@ -780,6 +780,16 @@ async function recordAndExport(){
   setBar(0);
 
   await srcVideo.play();
+  // 上書きモード：元動画の最初のフレームが実際に描かれるまで待ってから録画を始める
+  // （再生開始直後は映像が遅れて出るため、その間に文字だけが先に出てしまうのを防ぐ）
+  if (overwriteMode){
+    await new Promise(res => {
+      let done = false;
+      const fin = () => { if (!done){ done = true; res(); } };
+      if (srcVideo.requestVideoFrameCallback) srcVideo.requestVideoFrameCallback(() => fin());
+      setTimeout(fin, 1500);
+    });
+  }
   const t0 = performance.now();
   // 上書きモードでは元の動画に音声フェードが既に入っているので、ここでは掛けない
   if (gainNode && !overwriteMode){
@@ -798,7 +808,7 @@ async function recordAndExport(){
     renderFrame(Math.max(0, fadeFactor));
     setStatus(`録画中... ${elapsed.toFixed(1)}秒 / ${clipLen.toFixed(1)}秒`);
     setBar((elapsed / clipLen) * 100);
-    if (elapsed < clipLen){
+    if (elapsed < clipLen && !(overwriteMode && srcVideo.ended)){
       rafId = requestAnimationFrame(loop);
     } else {
       cancelAnimationFrame(rafId);
@@ -1006,7 +1016,9 @@ function sumRGB(c, r){
   return t;
 }
 function measureFade(){
-  if (!templateLoaded || !videoLoaded || srcVideo.readyState < 2) return 1;
+  if (!templateLoaded) return 1;
+  // 元動画のフレームがまだ出ていない間は、文字も出さない（黒い画面に文字だけ浮くのを防ぐ）
+  if (!videoLoaded || srcVideo.readyState < 2) return 0;
   if (!owTplSum){
     const c = document.createElement("canvas");
     c.width = CANVAS_W; c.height = CANVAS_H;
