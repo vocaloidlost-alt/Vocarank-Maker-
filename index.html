@@ -70,6 +70,11 @@
   }
   .field-note{font-size:11px; color:var(--sub);}
   .warn{color:#e8a33d;}
+  #owFields{display:none;}
+  body.ow #owFields{display:block;}
+  body.ow #normalFields{display:none;}
+  .chk{display:flex; align-items:center; gap:6px; color:var(--text); font-size:12px; margin:8px 0 3px;}
+  input[type=range]{width:100%;}
 </style>
 </head>
 <body>
@@ -80,6 +85,14 @@
 <div class="layout">
 
   <div class="form-col">
+
+    <fieldset>
+      <legend>モード</legend>
+      <label class="chk" style="margin:0"><input type="checkbox" id="owMode"> 上書きモード（作成済みの動画の番号・日付を直す）</label>
+      <div class="hint">オンにすると、すでに書き出したMP4を読み込んで、動画番号・発見日・投稿日だけを差し替えて書き出し直せます。</div>
+    </fieldset>
+
+    <div id="normalFields">
 
     <fieldset>
       <legend>VocaDBから自動入力</legend>
@@ -155,11 +168,26 @@
       <input type="text" id="artist">
     </fieldset>
 
+    </div>
+
+    <fieldset id="owFields">
+      <legend>上書きする内容</legend>
+      <div class="hint" style="margin:0 0 4px">直したい項目にチェックを入れて、正しい値を入力してください。チェックした項目だけが上書きされます。</div>
+      <label class="chk"><input type="checkbox" id="owRankOn"> 動画番号</label>
+      <input type="text" inputmode="numeric" id="owRank" placeholder="例: 68">
+      <label class="chk"><input type="checkbox" id="owFoundOn"> 発見日</label>
+      <input type="text" id="owFound" placeholder="例: 2026/7/29">
+      <div class="hint" id="owFoundHint"></div>
+      <label class="chk"><input type="checkbox" id="owUploadOn"> 投稿日</label>
+      <input type="text" id="owUpload" placeholder="例: 2012/12/31">
+      <div class="hint" id="owUploadHint"></div>
+    </fieldset>
+
     <fieldset>
       <legend>埋め込む動画</legend>
-      <label>動画ファイルを選択</label>
+      <label id="fileLabel">動画ファイルを選択</label>
       <input type="file" id="videoFile" accept="video/*">
-      <div class="hint">選択すると、右側のタイムラインで使う30秒を選べます。</div>
+      <div class="hint" id="fileHint">選択すると、右側のタイムラインで使う30秒を選べます。</div>
       <video id="srcVideo" playsinline style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"></video>
     </fieldset>
 
@@ -185,6 +213,15 @@
         <div class="tl-head" id="tlHead"></div>
       </div>
       <div class="hint" id="trimInfo"></div>
+    </div>
+
+    <div class="trim-box" id="owBox" style="display:none">
+      <div class="trim-head">
+        <span class="trim-title">プレビュー（上書き結果の確認）</span>
+        <span class="trim-btns"><button type="button" class="small" id="owPlayBtn">▶ 再生</button></span>
+      </div>
+      <input type="range" id="owSeek" min="0" max="30" step="0.1" value="0">
+      <div class="hint" id="owInfo"></div>
     </div>
 
     <div class="status-row">
@@ -318,7 +355,7 @@ function resetFormState(){
   scheduleRedraw();
 }
 document.getElementById("resetBtn").addEventListener("click", () => {
-  if (confirm("入力した内容をすべてリセットします。よろしいですか？")) resetFormState();
+  if (confirm("入力した内容をすべてリセットします。よろしいですか？")) { resetFormState(); resetOverwriteFields(); }
 });
 
 /* 日付入力の英語表記プレビュー */
@@ -338,6 +375,7 @@ templateImg.src = TEMPLATE_SRC;
 
 const srcVideo = document.getElementById("srcVideo");
 let videoLoaded = false;
+let overwriteMode = false;
 
 function currentFormData(){
   return {
@@ -425,6 +463,7 @@ function drawVideoIntoBox(mediaEl){
 
 /* fadeFactor: 0=真っ黒 / 1=通常表示 */
 function renderFrame(fadeFactor = 1){
+  if (overwriteMode){ renderOverwriteFrame(); return; }
   ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
@@ -534,6 +573,7 @@ videoFileInput.addEventListener("change", () => {
   const file = videoFileInput.files[0];
   if (!file) return;
   stopPreview();
+  owStop();
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = URL.createObjectURL(file);
   srcVideo.src = objectUrl;
@@ -541,11 +581,7 @@ videoFileInput.addEventListener("change", () => {
   srcVideo.onloadedmetadata = () => {
     videoLoaded = true;
     const dur = srcVideo.duration;
-    winLen = Math.min(CLIP_SECONDS, dur);
-    trimBox.style.display = "block";
-    setStart(0);
-    genBtn.disabled = false;
-    setStatus("使う範囲を選んで「MP4を生成」を押してください。");
+    applyLoadedVideo();
     buildThumbs(objectUrl, dur);
   };
 });
@@ -702,6 +738,7 @@ async function getFFmpeg(){
 
 genBtn.addEventListener("click", async () => {
   genBtn.disabled = true;
+  owToggle.disabled = true;
   downloadArea.innerHTML = "";
   recording = true;
   try {
@@ -715,14 +752,16 @@ genBtn.addEventListener("click", async () => {
     if (monitorGain) monitorGain.gain.value = 1;
     if (gainNode){ gainNode.gain.cancelScheduledValues(0); gainNode.gain.value = 1; }
     genBtn.disabled = false;
+    owToggle.disabled = false;
   }
 });
 
 async function recordAndExport(){
   stopPreview();
-  const startT = trimStartVal;
+  owStop();
+  const startT = overwriteMode ? 0 : trimStartVal;
   const dur = srcVideo.duration || CLIP_SECONDS;
-  const clipLen = Math.min(CLIP_SECONDS, dur - startT);
+  const clipLen = overwriteMode ? dur : Math.min(CLIP_SECONDS, dur - startT);
 
   ensureAudioGraph();
   if (audioCtx.state === "suspended") await audioCtx.resume();
@@ -749,7 +788,8 @@ async function recordAndExport(){
 
   await srcVideo.play();
   const t0 = performance.now();
-  if (gainNode){
+  // 上書きモードでは元の動画に音声フェードが既に入っているので、ここでは掛けない
+  if (gainNode && !overwriteMode){
     gainNode.gain.cancelScheduledValues(0);
     gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
     gainNode.gain.linearRampToValueAtTime(1, audioCtx.currentTime + FADE_SECONDS);
@@ -835,7 +875,9 @@ async function recordAndExport(){
   const a = document.createElement("a");
   a.href = url;
   a.className = "dl";
-  a.download = `rank_${document.getElementById("rank").value.trim() || "video"}.mp4`;
+  a.download = overwriteMode
+    ? `rank_${owRank.value.trim() || "video"}_fixed.mp4`
+    : `rank_${document.getElementById("rank").value.trim() || "video"}.mp4`;
   a.textContent = "MP4をダウンロード";
   downloadArea.innerHTML = "";
   downloadArea.appendChild(a);
@@ -853,6 +895,152 @@ if (document.fonts && document.fonts.load) {
   ]).then(() => scheduleRedraw()).catch(() => {});
 }
 
+
+/* ===== 上書きモード（作成済み動画の動画番号・日付だけを差し替える） ===== */
+const owToggle = document.getElementById("owMode");
+const owBox = document.getElementById("owBox");
+const owPlayBtn = document.getElementById("owPlayBtn");
+const owSeek = document.getElementById("owSeek");
+const owInfo = document.getElementById("owInfo");
+const owRankOn = document.getElementById("owRankOn"), owRank = document.getElementById("owRank");
+const owFoundOn = document.getElementById("owFoundOn"), owFound = document.getElementById("owFound");
+const owUploadOn = document.getElementById("owUploadOn"), owUpload = document.getElementById("owUpload");
+
+/* 元テンプレートの空パネル部分を貼り直して古い文字を消す範囲（1280x720基準） */
+const OW_PATCH = {
+  rank:       { x: 1034, y: 15,  w: 214, h: 138 },
+  foundDate:  { x: 1034, y: 167, w: 214, h: 34  },
+  uploadDate: { x: 40,   y: 675, w: 372, h: 26  }
+};
+
+function patchRegion(r, alpha){
+  ctx.save();
+  ctx.fillStyle = "#000";
+  ctx.fillRect(r.x, r.y, r.w, r.h);
+  if (templateLoaded){
+    const kx = templateImg.naturalWidth / CANVAS_W, ky = templateImg.naturalHeight / CANVAS_H;
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(templateImg, r.x * kx, r.y * ky, r.w * kx, r.h * ky, r.x, r.y, r.w, r.h);
+  }
+  ctx.restore();
+}
+
+function renderOverwriteFrame(){
+  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  if (videoLoaded && srcVideo.readyState >= 2){
+    const vw = srcVideo.videoWidth || CANVAS_W, vh = srcVideo.videoHeight || CANVAS_H;
+    const sc = Math.min(CANVAS_W / vw, CANVAS_H / vh);
+    const dw = vw * sc, dh = vh * sc;
+    ctx.drawImage(srcVideo, (CANVAS_W - dw) / 2, (CANVAS_H - dh) / 2, dw, dh);
+  }
+  // 元動画には最初・最後のフェードが焼き込み済みなので、貼り直す部分も同じ明るさに合わせる
+  const dur = srcVideo.duration || 0, t = srcVideo.currentTime || 0;
+  const f = dur > 0 ? clamp(Math.min(t / FADE_SECONDS, (dur - t) / FADE_SECONDS), 0, 1) : 1;
+
+  if (owRankOn.checked){
+    patchRegion(OW_PATCH.rank, f);
+    ctx.save(); ctx.globalAlpha = f;
+    drawBigNumber(owRank.value.trim(), LAYOUT.number.cx, LAYOUT.number.cy, LAYOUT.number.size, LAYOUT.number.maxW);
+    ctx.restore();
+  }
+  if (owFoundOn.checked){
+    patchRegion(OW_PATCH.foundDate, f);
+    ctx.save(); ctx.globalAlpha = f;
+    drawCenteredShadow(formatDateStr(owFound.value), LAYOUT.foundDate.cx, LAYOUT.foundDate.cy, LAYOUT.foundDate.size);
+    ctx.restore();
+  }
+  if (owUploadOn.checked){
+    patchRegion(OW_PATCH.uploadDate, f);
+    ctx.save(); ctx.globalAlpha = f;
+    drawLeftShadow(formatDateStr(owUpload.value), LAYOUT.footer.date.x, LAYOUT.footer.valueY, LAYOUT.footer.size);
+    ctx.restore();
+  }
+}
+
+/* 入力したら自動でチェックを入れる／日付の英語表記プレビュー */
+[[owRank, owRankOn, null], [owFound, owFoundOn, "owFoundHint"], [owUpload, owUploadOn, "owUploadHint"]].forEach(([inp, chk, hintId]) => {
+  inp.addEventListener("input", () => {
+    if (inp.value.trim() !== "") chk.checked = true;
+    if (hintId){ const f = formatDateStr(inp.value); document.getElementById(hintId).textContent = f ? "表示: " + f : ""; }
+    scheduleRedraw();
+  });
+  chk.addEventListener("change", scheduleRedraw);
+});
+function resetOverwriteFields(){
+  [owRank, owFound, owUpload].forEach(i => { i.value = ""; });
+  [owRankOn, owFoundOn, owUploadOn].forEach(c => { c.checked = false; });
+  document.getElementById("owFoundHint").textContent = "";
+  document.getElementById("owUploadHint").textContent = "";
+  scheduleRedraw();
+}
+
+/* 上書きモード用のプレビュー再生（動画全体） */
+let owPlaying = false, owRaf = 0;
+function owStop(){
+  if (!owPlaying) return;
+  owPlaying = false;
+  cancelAnimationFrame(owRaf);
+  srcVideo.pause();
+  owPlayBtn.textContent = "▶ 再生";
+}
+async function owStart(){
+  if (!videoLoaded || recording) return;
+  ensureAudioGraph();
+  if (audioCtx.state === "suspended") await audioCtx.resume();
+  monitorGain.gain.value = 1;
+  if (srcVideo.ended || srcVideo.currentTime >= (srcVideo.duration || 0) - 0.05) srcVideo.currentTime = 0;
+  await srcVideo.play();
+  owPlaying = true;
+  owPlayBtn.textContent = "■ 停止";
+  const loop = () => {
+    if (!owPlaying) return;
+    renderFrame(1);
+    owSeek.value = srcVideo.currentTime;
+    if (srcVideo.ended){ owStop(); return; }
+    owRaf = requestAnimationFrame(loop);
+  };
+  owRaf = requestAnimationFrame(loop);
+}
+owPlayBtn.onclick = () => (owPlaying ? owStop() : owStart());
+owSeek.addEventListener("input", () => { srcVideo.currentTime = +owSeek.value; });
+
+/* 動画読み込み後／モード切替後の画面状態を整える */
+function applyLoadedVideo(){
+  const dur = srcVideo.duration;
+  if (overwriteMode){
+    winLen = dur;
+    trimStartVal = 0;
+    trimBox.style.display = "none";
+    owBox.style.display = "block";
+    owSeek.max = dur;
+    srcVideo.currentTime = Math.min(3, dur / 2);
+    owSeek.value = srcVideo.currentTime;
+    owInfo.textContent = `動画の長さ: ${fmtTime(dur)}（全体を使い、最初と最後のフェードも自動で合わせます）`;
+    setStatus("直したい項目にチェックして値を入力し、「MP4を生成」を押してください。");
+  } else {
+    winLen = Math.min(CLIP_SECONDS, dur);
+    owBox.style.display = "none";
+    trimBox.style.display = "block";
+    setStart(0);
+    setStatus("使う範囲を選んで「MP4を生成」を押してください。");
+  }
+  genBtn.disabled = false;
+}
+owToggle.addEventListener("change", () => {
+  overwriteMode = owToggle.checked;
+  document.body.classList.toggle("ow", overwriteMode);
+  stopPreview();
+  owStop();
+  document.getElementById("fileLabel").textContent = overwriteMode ? "上書きしたい動画ファイル（書き出し済みのMP4）を選択" : "動画ファイルを選択";
+  document.getElementById("fileHint").textContent = overwriteMode
+    ? "選択した動画の動画番号・日付の部分だけを差し替えて書き出し直します。"
+    : "選択すると、右側のタイムラインで使う30秒を選べます。";
+  if (videoLoaded){ applyLoadedVideo(); }
+  else { setStatus(overwriteMode ? "上書きしたい動画ファイルを選択してください" : "動画ファイルを選択してください"); }
+  scheduleRedraw();
+});
 
 /* ===== VocaDB 自動入力 ===== */
 let vdbUploads = [];
