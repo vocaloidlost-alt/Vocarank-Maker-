@@ -1045,12 +1045,22 @@ function renderOverwriteFrame(){
   }
   // 貼り直す部分と新しい文字も、いま映っている元動画フレームと同じ明るさに合わせる
   const f = measureFade();
+  // 文字にglobalAlphaを掛けるとSafariで無視されることがあるため、
+  // 通常モードと同じく「貼り直し＋文字を100%で描いてから、黒を重ねて暗くする」方式にする
   OW_ITEMS.forEach(it => {
     if (!it.on.checked) return;
-    patchRegion(it.patch, f);
+    const r = it.patch;
     ctx.save();
-    ctx.globalAlpha = f;
+    ctx.beginPath();
+    ctx.rect(r.x, r.y, r.w, r.h);
+    ctx.clip();
+    patchRegion(r, 1);
     it.draw(it.input.value);
+    if (f < 1){
+      ctx.globalAlpha = 1 - f;
+      ctx.fillStyle = "#000";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+    }
     ctx.restore();
   });
 }
